@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#090a12">
+  <title>흔적의 온도 — 인터랙티브 미디어 아트</title>
+  <style>
+    :root { color-scheme: dark; --ink: #f4f0ff; --muted: #aaa7bb; }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    body {
+      background: #090a12; color: var(--ink);
+      font-family: Inter, Pretendard, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+      cursor: crosshair;
+    }
+    canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+    .veil {
+      position: fixed; inset: 0; pointer-events: none;
+      background: radial-gradient(ellipse at 50% 44%, transparent 15%, rgba(5,6,12,.17) 100%);
+    }
+    header { position: fixed; top: clamp(24px, 5vw, 58px); left: clamp(24px, 6vw, 84px); pointer-events: none; }
+    .eyebrow { color: #b8a9ff; font-size: 10px; letter-spacing: .25em; text-transform: uppercase; margin-bottom: 15px; }
+    h1 { font-size: clamp(30px, 5vw, 62px); letter-spacing: -.065em; line-height: 1.05; font-weight: 500; margin: 0; }
+    .subtitle { color: var(--muted); font-size: clamp(12px, 1.4vw, 15px); margin-top: 16px; letter-spacing: .015em; }
+    .status {
+      position: fixed; right: clamp(24px, 6vw, 84px); top: clamp(30px, 5vw, 62px);
+      display: flex; align-items: center; gap: 10px; color: #d5d0e2;
+      font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+    }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: #a58bff; box-shadow: 0 0 15px #a58bff; transition: background .3s, box-shadow .3s; }
+    .status[data-state="flow"] .dot { background: #65e9dd; box-shadow: 0 0 15px #65e9dd; }
+    .status[data-state="storm"] .dot { background: #ff8bba; box-shadow: 0 0 18px #ff8bba; }
+    footer {
+      position: fixed; left: clamp(24px, 6vw, 84px); right: clamp(24px, 6vw, 84px); bottom: clamp(23px, 4vw, 44px);
+      display: flex; justify-content: space-between; align-items: end; gap: 20px; pointer-events: none;
+    }
+    .hint { color: #a6a2b4; font-size: 12px; line-height: 1.8; }
+    .hint strong { color: #eeeaf8; font-weight: 500; }
+    .controls { display: flex; gap: 9px; pointer-events: auto; }
+    button {
+      border: 1px solid rgba(255,255,255,.18); background: rgba(15,15,27,.55); color: #f2effa;
+      border-radius: 999px; padding: 11px 17px; font: inherit; font-size: 11px; letter-spacing: .06em;
+      cursor: pointer; backdrop-filter: blur(12px); transition: background .2s, border-color .2s, transform .2s;
+    }
+    button:hover { background: rgba(255,255,255,.12); border-color: rgba(255,255,255,.42); transform: translateY(-1px); }
+    button:focus-visible { outline: 2px solid #b8a9ff; outline-offset: 3px; }
+    .caption { position: fixed; left: 50%; top: 50%; transform: translate(-50%,-50%); color: rgba(242,239,250,.32); font-size: 10px; letter-spacing: .32em; pointer-events: none; transition: opacity .8s; }
+    .caption.hidden { opacity: 0; }
+    @media (max-width: 600px) {
+      .status { top: auto; right: 24px; bottom: 112px; }
+      footer { align-items: start; flex-direction: column; }
+      .controls { align-self: stretch; }
+      button { flex: 1; }
+      .hint { font-size: 11px; }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="art" aria-label="마우스나 손가락을 움직여 색의 흔적을 그려보세요"></canvas>
+  <div class="veil"></div>
+  <header>
+    <div class="eyebrow">Interactive study · 01</div>
+    <h1>흔적의 온도</h1>
+    <div class="subtitle">감정은 지나간 자리의 색으로 남는다.</div>
+  </header>
+  <div class="status" id="status" data-state="still"><span class="dot"></span><span id="stateText">Still / 고요</span></div>
+  <div class="caption" id="caption">MOVE TO LEAVE A TRACE</div>
+  <footer>
+    <div class="hint"><strong>움직여서 그려보세요.</strong> 빠르게 움직일수록 흔적은 거칠고 뜨거워집니다.<br>멈추면 천천히 사라집니다. 화면을 클릭하면 지워집니다.</div>
+    <div class="controls"><button id="clear" type="button">흔적 지우기</button><button id="pause" type="button">그리기 멈춤</button></div>
+  </footer>
+  <script>
+    (() => {
+      const canvas = document.querySelector('#art');
+      const ctx = canvas.getContext('2d', { alpha: false });
+      const status = document.querySelector('#status');
+      const stateText = document.querySelector('#stateText');
+      const caption = document.querySelector('#caption');
+      let w = 0, h = 0, dpr = 1, last = null, lastTime = 0, speed = 0, paused = false;
+      let pointer = { x: -1000, y: -1000 }, captionTimer;
+      const colors = [
+        { h: 257, s: 92, l: 72 }, { h: 190, s: 90, l: 69 },
+        { h: 323, s: 93, l: 74 }, { h: 39, s: 96, l: 70 }
+      ];
+
+      function resize() {
+        dpr = Math.min(window.devicePixelRatio || 1, 2);
+        w = window.innerWidth; h = window.innerHeight;
+        canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.fillStyle = '#090a12'; ctx.fillRect(0, 0, w, h);
+        last = null;
+      }
+      window.addEventListener('resize', resize, { passive: true }); resize();
+
+      function setMood(value) {
+        const mood = value < 0.7 ? ['still', 'Still / 고요'] : value < 3.2 ? ['flow', 'Flow / 흐름'] : ['storm', 'Storm / 격동'];
+        status.dataset.state = mood[0]; stateText.textContent = mood[1];
+      }
+
+      function drawPoint(x, y, velocity, timestamp) {
+        const force = Math.min(velocity / 14, 1);
+        const color = colors[Math.min(3, Math.floor(force * 4))];
+        const count = 1 + Math.floor(force * 5);
+        for (let i = 0; i < count; i++) {
+          const jitter = 2 + force * 23;
+          const px = x + (Math.random() - .5) * jitter;
+          const py = y + (Math.random() - .5) * jitter;
+          const radius = 1 + Math.random() * (2 + force * 7);
+          const hue = color.h + (Math.random() - .5) * 28;
+          const light = color.l + (Math.random() - .5) * 12;
+          ctx.beginPath(); ctx.arc(px, py, radius, 0, Math.PI * 2);
+          ctx.fillStyle = `hsla(${hue}, ${color.s}%, ${light}%, ${.22 + Math.random() * .5})`;
+          ctx.shadowBlur = 7 + force * 23;
+          ctx.shadowColor = `hsla(${hue}, ${color.s}%, ${color.l}%, .8)`;
+          ctx.fill();
+        }
+        ctx.shadowBlur = 0;
+        if (last) {
+          const hue = color.h;
+          ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(x, y);
+          ctx.lineWidth = .5 + force * 2.4;
+          ctx.strokeStyle = `hsla(${hue}, ${color.s}%, ${color.l}%, ${.12 + force * .28})`;
+          ctx.shadowBlur = 10 + force * 16; ctx.shadowColor = `hsla(${hue}, 95%, 70%, .7)`;
+          ctx.stroke(); ctx.shadowBlur = 0;
+        }
+        last = { x, y }; pointer = { x, y }; lastTime = timestamp;
+      }
+
+      function onMove(event) {
+        if (paused) return;
+        const x = event.clientX, y = event.clientY, now = performance.now();
+        if (last) {
+          const dt = Math.max(8, now - lastTime);
+          const distance = Math.hypot(x - last.x, y - last.y);
+          const instant = distance / dt;
+          speed = speed * .55 + instant * .45;
+          const fromX = last.x, fromY = last.y;
+          const steps = Math.max(1, Math.ceil(distance / 5));
+          for (let i = 1; i <= steps; i++) {
+            const t = i / steps;
+            drawPoint(fromX + (x - fromX) * t, fromY + (y - fromY) * t, speed * 12, now);
+          }
+        } else drawPoint(x, y, 0, now);
+        setMood(speed);
+        caption.classList.add('hidden');
+        clearTimeout(captionTimer);
+        captionTimer = setTimeout(() => caption.classList.remove('hidden'), 4500);
+      }
+      window.addEventListener('pointermove', onMove, { passive: true });
+      window.addEventListener('pointerdown', e => { if (e.target.closest('button')) return; last = null; onMove(e); }, { passive: true });
+      window.addEventListener('pointerup', () => { last = null; }, { passive: true });
+
+      function fade() {
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.fillStyle = 'rgba(9, 10, 18, 0.035)'; ctx.fillRect(0, 0, w, h);
+        speed *= .985;
+        if (performance.now() - lastTime > 1400) setMood(0);
+        requestAnimationFrame(fade);
+      }
+      requestAnimationFrame(fade);
+
+      document.querySelector('#clear').addEventListener('click', () => {
+        ctx.fillStyle = '#090a12'; ctx.fillRect(0, 0, w, h); last = null;
+      });
+      const pauseButton = document.querySelector('#pause');
+      pauseButton.addEventListener('click', () => {
+        paused = !paused; last = null;
+        pauseButton.textContent = paused ? '그리기 다시 시작' : '그리기 멈춤';
+        caption.textContent = paused ? 'PAUSED · 잠시 멈춤' : 'MOVE TO LEAVE A TRACE';
+        caption.classList.toggle('hidden', !paused);
+      });
+    })();
+  </script>
+</body>
+</html>
